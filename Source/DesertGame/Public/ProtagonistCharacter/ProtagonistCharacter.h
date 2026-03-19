@@ -14,6 +14,7 @@ class UInputAction;
 struct FInputActionValue;
 class UTraversalComponent;
 class UMotionWarpingComponent;
+class UCombatComponent;
 
 UCLASS()
 class DESERTGAME_API AProtagonistCharacter : public ACharacter
@@ -41,6 +42,9 @@ public:
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Traversal")
 	TObjectPtr<UMotionWarpingComponent> MotionWarpingComponent;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Combat")
+	TObjectPtr<UCombatComponent> CombatComponent;
 
 	// ============================================================
 	// Camera / Look Control
@@ -114,6 +118,15 @@ protected:
 	UPROPERTY(EditDefaultsOnly, Category = "Input")
 	TObjectPtr<UInputAction> CrouchAction;
 
+	UPROPERTY(EditDefaultsOnly, Category = "Input")
+	TObjectPtr<UInputAction> AttackAction;
+
+	UPROPERTY(EditDefaultsOnly, Category = "Input")
+	TObjectPtr<UInputAction> BlockAction;
+
+	UPROPERTY(EditDefaultsOnly, Category = "Input")
+	TObjectPtr<UInputAction> DodgeAction;
+
 	// ============================================================
 	// Input Handlers
 	// ============================================================
@@ -125,6 +138,10 @@ protected:
 	void StartSprint();
 	void StopSprint();
 	void ToggleCrouch();
+	void OnAttackInput();
+	void OnBlockStart();
+	void OnBlockStop();
+	void OnDodgeInput(const FInputActionValue& Value);
 
 private:
 	void UpdateMovementState();

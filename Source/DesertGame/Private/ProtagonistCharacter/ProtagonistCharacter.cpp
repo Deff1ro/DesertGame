@@ -8,6 +8,7 @@
 #include "EnhancedInputSubsystems.h"
 #include "Traversal/TraversalComponent.h"
 #include "MotionWarpingComponent.h"
+#include "Combat/CombatComponent.h"
 
 AProtagonistCharacter::AProtagonistCharacter()
 {
@@ -42,6 +43,8 @@ AProtagonistCharacter::AProtagonistCharacter()
 	TraversalComponent = CreateDefaultSubobject<UTraversalComponent>(TEXT("TraversalComponent"));
 	MotionWarpingComponent = CreateDefaultSubobject<UMotionWarpingComponent>(TEXT("MotionWarpingComponent"));
 
+	// Combat
+	CombatComponent = CreateDefaultSubobject<UCombatComponent>(TEXT("CombatComponent"));
 }
 
 void AProtagonistCharacter::BeginPlay()
@@ -107,7 +110,21 @@ void AProtagonistCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInp
 		EnhancedInput->BindAction(CrouchAction, ETriggerEvent::Started, this, &AProtagonistCharacter::ToggleCrouch);
 	}
 
-	// TraverseAction removed — traversal is handled by StartJump (same key as Jump)
+	if (AttackAction)
+	{
+		EnhancedInput->BindAction(AttackAction, ETriggerEvent::Started, this, &AProtagonistCharacter::OnAttackInput);
+	}
+
+	if (BlockAction)
+	{
+		EnhancedInput->BindAction(BlockAction, ETriggerEvent::Started, this, &AProtagonistCharacter::OnBlockStart);
+		EnhancedInput->BindAction(BlockAction, ETriggerEvent::Completed, this, &AProtagonistCharacter::OnBlockStop);
+	}
+
+	if (DodgeAction)
+	{
+		EnhancedInput->BindAction(DodgeAction, ETriggerEvent::Started, this, &AProtagonistCharacter::OnDodgeInput);
+	}
 }
 
 // ============================================================
@@ -191,6 +208,51 @@ void AProtagonistCharacter::ToggleCrouch()
 		UnCrouch();
 		CurrentStanceState = EStanceState::Standing;
 	}
+}
+
+void AProtagonistCharacter::OnAttackInput()
+{
+	if (CombatComponent)
+	{
+		CombatComponent->RequestAttack();
+	}
+}
+
+void AProtagonistCharacter::OnBlockStart()
+{
+	if (CombatComponent)
+	{
+		CombatComponent->StartBlock();
+	}
+}
+
+void AProtagonistCharacter::OnBlockStop()
+{
+	if (CombatComponent)
+	{
+		CombatComponent->StopBlock();
+	}
+}
+
+void AProtagonistCharacter::OnDodgeInput(const FInputActionValue& Value)
+{
+	if (!CombatComponent) return;
+
+	const FVector2D Input = Value.Get<FVector2D>();
+	if (Input.IsNearlyZero()) return;
+
+	// Determine dominant axis
+	EDodgeDirection Direction;
+	if (FMath::Abs(Input.Y) >= FMath::Abs(Input.X))
+	{
+		Direction = (Input.Y > 0.f) ? EDodgeDirection::Forward : EDodgeDirection::Backward;
+	}
+	else
+	{
+		Direction = (Input.X > 0.f) ? EDodgeDirection::Right : EDodgeDirection::Left;
+	}
+
+	CombatComponent->RequestDodge(Direction);
 }
 
 // ============================================================
