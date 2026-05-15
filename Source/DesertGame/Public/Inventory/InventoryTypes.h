@@ -76,6 +76,22 @@ struct FInventorySlot
 	void Clear() { ItemData = nullptr; Quantity = 0; }
 };
 
+// One entry in an enemy loot table: a specific item that drops in a random quantity.
+USTRUCT(BlueprintType)
+struct FEnemyLootEntry
+{
+	GENERATED_BODY()
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Loot")
+	TObjectPtr<UItemDataAsset> Item = nullptr;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Loot", meta = (ClampMin = "1"))
+	int32 DropMin = 1;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Loot", meta = (ClampMin = "1"))
+	int32 DropMax = 1;
+};
+
 USTRUCT(BlueprintType)
 struct FInventorySlotReference
 {

@@ -3,12 +3,15 @@
 #include "Enemy/EnemyCharacter.h"
 #include "Enemy/EnemyAIController.h"
 #include "Enemy/EnemyAttackComponent.h"
+#include "Inventory/ItemActor.h"
+#include "Inventory/ItemDataAsset.h"
 #include "Components/CapsuleComponent.h"
 #include "Components/SkeletalMeshComponent.h"
 #include "GameFramework/CharacterMovementComponent.h"
 #include "AIController.h"
 #include "BrainComponent.h"
 #include "TimerManager.h"
+#include "Engine/World.h"
 
 AEnemyCharacter::AEnemyCharacter()
 {
@@ -88,15 +91,68 @@ void AEnemyCharacter::HandleDeath()
 		Capsule->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 	}
 
+	SpawnLootDrops();
+
 	if (DeathLingerTime > 0.f)
 	{
-		// Give a moment for a death montage / fade. Adjust per BP if needed.
 		SetLifeSpan(DeathLingerTime);
 	}
 	else
 	{
-		// No linger time configured — vanish immediately.
 		Destroy();
+	}
+}
+
+void AEnemyCharacter::SpawnLootDrops()
+{
+	if (LootTable.Num() == 0 || !DropActorClass)
+	{
+		return;
+	}
+
+	UWorld* World = GetWorld();
+	if (!World)
+	{
+		return;
+	}
+
+	FActorSpawnParameters Params;
+	Params.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AdjustIfPossibleButAlwaysSpawn;
+
+	const FVector Origin = GetActorLocation() + FVector(0.f, 0.f, DropSpawnHeight);
+
+	for (const FEnemyLootEntry& Entry : LootTable)
+	{
+		if (!Entry.Item)
+		{
+			continue;
+		}
+
+		const int32 Count = FMath::RandRange(Entry.DropMin, FMath::Max(Entry.DropMin, Entry.DropMax));
+
+		for (int32 i = 0; i < Count; ++i)
+		{
+			const float Angle = FMath::FRandRange(0.f, 2.f * PI);
+			const FVector LateralDir(FMath::Cos(Angle), FMath::Sin(Angle), 0.f);
+
+			const float SpawnOffsetDistance = FMath::FRandRange(0.f, FMath::Min(DropScatterRadius * 0.25f, 25.f));
+			const FRotator SpawnRotation = FMath::VRand().Rotation();
+			const FVector SpawnLocation = Origin + LateralDir * SpawnOffsetDistance;
+
+			AItemActor* Item = World->SpawnActor<AItemActor>(DropActorClass, SpawnLocation, SpawnRotation, Params);
+			if (!Item)
+			{
+				continue;
+			}
+
+			Item->Initialize(Entry.Item, 1);
+
+			const float LateralStrength = FMath::FRandRange(150.f, 300.f);
+			const float UpwardStrength = FMath::FRandRange(250.f, 400.f);
+			const FVector Impulse = LateralDir * LateralStrength + FVector(0.f, 0.f, UpwardStrength);
+
+			Item->LaunchAsDrop(Impulse);
+		}
 	}
 }
 

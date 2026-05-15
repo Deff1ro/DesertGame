@@ -4,11 +4,13 @@
 
 #include "CoreMinimal.h"
 #include "GameFramework/Character.h"
+#include "Inventory/InventoryTypes.h"
 #include "EnemyCharacter.generated.h"
 
 class UAnimMontage;
 class UBehaviorTree;
 class UEnemyAttackComponent;
+class AItemActor;
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE(FOnEnemyDied);
 
@@ -47,6 +49,26 @@ public:
 	// montage. 0 = destroy on the same frame.
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Enemy|Health", meta = (ClampMin = "0.0"))
 	float DeathLingerTime = 0.f;
+
+	// ============================================================
+	// Loot drops
+	// ============================================================
+
+	// Items that scatter out of this enemy when it dies.
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Enemy|Loot")
+	TArray<FEnemyLootEntry> LootTable;
+
+	// How far (cm) items are scattered sideways from the death location.
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Enemy|Loot", meta = (ClampMin = "0.0"))
+	float DropScatterRadius = 100.f;
+
+	// Height above the actor origin at which drops are spawned.
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Enemy|Loot", meta = (ClampMin = "0.0"))
+	float DropSpawnHeight = 50.f;
+
+	// Class used to spawn loot actors. Assign AItemActor subclass in BP if needed.
+	UPROPERTY(EditDefaultsOnly, Category = "Enemy|Loot")
+	TSubclassOf<AItemActor> DropActorClass;
 
 	// ============================================================
 	// Patrol
@@ -94,4 +116,6 @@ protected:
 
 private:
 	int32 CurrentPatrolIndex = 0;
+
+	void SpawnLootDrops();
 };

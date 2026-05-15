@@ -4,6 +4,7 @@
 
 #include "CoreMinimal.h"
 #include "GameFramework/Actor.h"
+#include "Inventory/InventoryTypes.h"
 #include "WormEnemy.generated.h"
 
 class USkeletalMeshComponent;
@@ -11,6 +12,7 @@ class UCapsuleComponent;
 class UAnimMontage;
 class UPrimitiveComponent;
 class UCameraShakeBase;
+class AItemActor;
 
 DECLARE_LOG_CATEGORY_EXTERN(LogDesertWorm, Log, All);
 
@@ -108,6 +110,22 @@ public:
 	UPROPERTY(BlueprintAssignable, Category = "Worm|Health")
 	FOnWormDied OnDied;
 
+	// ============================================================
+	// Loot drops
+	// ============================================================
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Worm|Loot")
+	TArray<FEnemyLootEntry> LootTable;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Worm|Loot", meta = (ClampMin = "0.0"))
+	float DropScatterRadius = 100.f;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Worm|Loot", meta = (ClampMin = "0.0"))
+	float DropSpawnHeight = 50.f;
+
+	UPROPERTY(EditDefaultsOnly, Category = "Worm|Loot")
+	TSubclassOf<AItemActor> DropActorClass;
+
 	UFUNCTION(BlueprintPure, Category = "Worm|Health")
 	bool IsAlive() const { return CurrentHealth > 0.f; }
 
@@ -178,4 +196,6 @@ private:
 	FVector MotionStart = FVector::ZeroVector;
 	FVector MotionEnd = FVector::ZeroVector;
 	float MotionDuration = 0.f;
+
+	void SpawnLootDrops();
 };
