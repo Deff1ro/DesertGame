@@ -4,6 +4,15 @@
 #include "GameFramework/Character.h"
 #include "Animation/AnimInstance.h"
 #include "Animation/AnimMontage.h"
+#include "Engine/World.h"
+#include "Kismet/KismetSystemLibrary.h"
+#include "Enemy/EnemyCharacter.h"
+#include "Enemy/WormEnemy.h"
+#include "ProtagonistCharacter/ProtagonistCharacter.h"
+#include "Inventory/InventoryComponent.h"
+#include "Inventory/ItemDataAsset.h"
+#include "Kismet/GameplayStatics.h"
+#include "Sound/SoundBase.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogCombat, Log, All);
 
@@ -177,7 +186,7 @@ bool UCombatComponent::IsBlocking() const
 // Dodge
 // ============================================================
 
-void UCombatComponent::RequestDodge(EDodgeDirection Direction)
+void UCombatComponent::RequestDodge(EDodgeDirection Direction, FVector WorldSlideDirection)
 {
 	if (!CachedAnimInstance)
 	{
@@ -205,14 +214,23 @@ void UCombatComponent::RequestDodge(EDodgeDirection Direction)
 	// Start extra slide on top of root motion
 	if (const AActor* Owner = GetOwner())
 	{
-		const FRotator Rot = Owner->GetActorRotation();
-
-		switch (Direction)
+		// Use the explicit world direction if the caller provided one. Otherwise
+		// fall back to the owner-rotation-relative derivation.
+		if (!WorldSlideDirection.IsNearlyZero())
 		{
-		case EDodgeDirection::Forward:  DodgeSlideDirection = Rot.Vector(); break;
-		case EDodgeDirection::Backward: DodgeSlideDirection = -Rot.Vector(); break;
-		case EDodgeDirection::Left:     DodgeSlideDirection = -FRotationMatrix(Rot).GetUnitAxis(EAxis::Y); break;
-		case EDodgeDirection::Right:    DodgeSlideDirection = FRotationMatrix(Rot).GetUnitAxis(EAxis::Y); break;
+			DodgeSlideDirection = WorldSlideDirection;
+		}
+		else
+		{
+			const FRotator Rot = Owner->GetActorRotation();
+
+			switch (Direction)
+			{
+			case EDodgeDirection::Forward:  DodgeSlideDirection = Rot.Vector(); break;
+			case EDodgeDirection::Backward: DodgeSlideDirection = -Rot.Vector(); break;
+			case EDodgeDirection::Left:     DodgeSlideDirection = -FRotationMatrix(Rot).GetUnitAxis(EAxis::Y); break;
+			case EDodgeDirection::Right:    DodgeSlideDirection = FRotationMatrix(Rot).GetUnitAxis(EAxis::Y); break;
+			}
 		}
 
 		DodgeSlideDirection.Z = 0.f;
@@ -290,4 +308,106 @@ void UCombatComponent::ResetCombo()
 	ComboIndex = 0;
 	bComboWindowOpen = false;
 	bPendingNextCombo = false;
+}
+
+// ============================================================
+// Sword hit
+// ============================================================
+
+void UCombatComponent::PerformSwordHit()
+{
+	AProtagonistCharacter* Owner = Cast<AProtagonistCharacter>(GetOwner());
+	if (!Owner)
+	{
+		return;
+	}
+
+	UWorld* World = GetWorld();
+	if (!World)
+	{
+		return;
+	}
+
+	// Damage only happens when the player has a sword in hand. The notify is
+	// shared by the combo montage, so guard against bare-hand swings or someone
+	// firing the notify on a non-sword combo by accident.
+	UInventoryComponent* Inv = Owner->GetInventoryComponent();
+	UItemDataAsset* Selected = Inv ? Inv->GetSelectedItem() : nullptr;
+	if (!Selected || Selected->ToolType != EToolType::Sword)
+	{
+		return;
+	}
+
+	const FVector Forward = Owner->GetActorForwardVector();
+	const FVector Up = Owner->GetActorUpVector();
+	const FVector Centre = Owner->GetActorLocation()
+		+ Forward * SwordForwardReach
+		+ Up * SwordVerticalOffset;
+	const FQuat CapsuleRot = Owner->GetActorRotation().Quaternion();
+
+	FCollisionQueryParams Params;
+	Params.AddIgnoredActor(Owner);
+
+	// Swing sound plays on every notify, hit or miss.
+	if (SwordSwingSound)
+	{
+		UGameplayStatics::PlaySoundAtLocation(this, SwordSwingSound, Owner->GetActorLocation());
+	}
+
+	TArray<FHitResult> Hits;
+	const bool bAnyHit = World->SweepMultiByChannel(
+		Hits,
+		Centre,
+		Centre,
+		CapsuleRot,
+		ECC_Pawn,
+		FCollisionShape::MakeCapsule(SwordCapsuleRadius, SwordCapsuleHalfHeight),
+		Params);
+
+	if (bDebugDrawSwordHit)
+	{
+		UKismetSystemLibrary::DrawDebugCapsule(
+			World,
+			Centre,
+			SwordCapsuleHalfHeight,
+			SwordCapsuleRadius,
+			Owner->GetActorRotation(),
+			bAnyHit ? FLinearColor::Red : FLinearColor::Green,
+			1.5f);
+	}
+
+	if (!bAnyHit)
+	{
+		return;
+	}
+
+	// Hit-confirm sound — plays once per swing when at least one valid target was struck.
+	if (SwordHitSound)
+	{
+		UGameplayStatics::PlaySoundAtLocation(this, SwordHitSound, Centre);
+	}
+
+	// Apply damage at most once per actor per swing.
+	const int32 Damage = Selected->ToolDamage;
+	TSet<AActor*> AlreadyHit;
+	for (const FHitResult& Hit : Hits)
+	{
+		AActor* HitActor = Hit.GetActor();
+		if (!HitActor || AlreadyHit.Contains(HitActor))
+		{
+			continue;
+		}
+		AlreadyHit.Add(HitActor);
+
+		if (AEnemyCharacter* Enemy = Cast<AEnemyCharacter>(HitActor))
+		{
+			Enemy->TakeDamageAmount(static_cast<float>(Damage));
+			UE_LOG(LogCombat, Log, TEXT("Sword hit '%s' for %d"), *Enemy->GetName(), Damage);
+		}
+		else if (AWormEnemy* Worm = Cast<AWormEnemy>(HitActor))
+		{
+			Worm->TakeDamageAmount(static_cast<float>(Damage));
+			UE_LOG(LogCombat, Log, TEXT("Sword hit worm '%s' for %d"), *Worm->GetName(), Damage);
+		}
+	}
 }

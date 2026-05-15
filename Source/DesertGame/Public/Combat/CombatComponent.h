@@ -60,12 +60,22 @@ public:
 	UFUNCTION(BlueprintCallable, BlueprintPure, Category = "Combat")
 	bool IsBlocking() const;
 
-	/** Dodge — called from character input (Ctrl + WASD) */
+	/** Dodge — called from character input (Ctrl + WASD).
+	 *  WorldSlideDirection: world-space direction the slide should move in. Pass
+	 *  ZeroVector to fall back to deriving it from the owner's actor rotation
+	 *  (legacy behaviour). Pass an explicit vector when the caller wants the
+	 *  slide to follow a different basis (e.g. camera-relative input). */
 	UFUNCTION(BlueprintCallable, Category = "Combat")
-	void RequestDodge(EDodgeDirection Direction);
+	void RequestDodge(EDodgeDirection Direction, FVector WorldSlideDirection = FVector::ZeroVector);
 
 	UFUNCTION(BlueprintCallable, BlueprintPure, Category = "Combat")
 	bool IsDodging() const;
+
+	// Called by UAnimNotify_SwordHit at the impact frame of every combo section.
+	// Sweeps a capsule in front of the owner and damages enemies caught inside.
+	// Damage is read from the currently equipped sword's ItemDataAsset.ToolDamage.
+	UFUNCTION(BlueprintCallable, Category = "Combat|Sword")
+	void PerformSwordHit();
 
 	// ============================================================
 	// Settings
@@ -94,6 +104,33 @@ public:
 	/** How long (seconds) the extra movement lasts */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Combat|Settings")
 	float DodgeSlideDuration = 0.3f;
+
+	// ============================================================
+	// Sword Hitbox (capsule swept in front of the player on each combo strike)
+	// ============================================================
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Combat|Sword", meta = (ClampMin = "1.0"))
+	float SwordCapsuleRadius = 50.f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Combat|Sword", meta = (ClampMin = "1.0"))
+	float SwordCapsuleHalfHeight = 90.f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Combat|Sword", meta = (ClampMin = "0.0"))
+	float SwordForwardReach = 120.f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Combat|Sword")
+	float SwordVerticalOffset = 0.f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Combat|Sword|Debug")
+	bool bDebugDrawSwordHit = false;
+
+	// Sound played whenever the sword swings (one per combo strike notify).
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Combat|Sword|Audio")
+	TObjectPtr<class USoundBase> SwordSwingSound;
+
+	// Sound played when the swing actually hits an enemy.
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Combat|Sword|Audio")
+	TObjectPtr<class USoundBase> SwordHitSound;
 
 	// ============================================================
 	// Runtime State (read by AnimInstance if needed)
