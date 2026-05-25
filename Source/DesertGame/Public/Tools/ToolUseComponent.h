@@ -66,4 +66,18 @@ private:
 
 	UPROPERTY()
 	TObjectPtr<UItemDataAsset> ActiveToolData;
+
+	// True while an axe/pickaxe swing montage is still playing. Blocks new
+	// swings and freezes the character in place.
+	bool bIsSwinging = false;
+
+	// Montage we locked input on; remembered so we can clean the end-delegate.
+	UPROPERTY()
+	TObjectPtr<UAnimMontage> ActiveMontage;
+
+	UFUNCTION()
+	void OnSwingMontageEnded(UAnimMontage* Montage, bool bInterrupted);
+
+	void LockMovement();
+	void UnlockMovement();
 };

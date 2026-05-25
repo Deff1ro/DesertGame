@@ -23,6 +23,7 @@
 #include "Components/StaticMeshComponent.h"
 #include "Camera/PlayerSpringArmComponent.h"
 #include "Environment/DayNightCycleManager.h"
+#include "Environment/CampfireActor.h"
 #include "Kismet/GameplayStatics.h"
 #include "Sound/SoundBase.h"
 
@@ -238,8 +239,14 @@ void AProtagonistCharacter::TickEnvironmentEffects(float DeltaTime)
 	// 2) Suffering check — only when the player is alive and lacks the matching cloth.
 	const bool bWantsHeatProt = bIsDay;
 	const bool bWantsColdProt = !bIsDay;
+
+	// A nearby active campfire fully shelters the player from cold. We only do
+	// the lookup at night when it actually matters.
+	const bool bNearCampfire = bWantsColdProt
+		&& ACampfireActor::IsLocationWarmed(this, GetActorLocation());
+
 	const bool bNewSufferingHeat = bWantsHeatProt && Protection != EClothProtection::Heat && AttributeComponent->IsAlive();
-	const bool bNewSufferingCold = bWantsColdProt && Protection != EClothProtection::Cold && AttributeComponent->IsAlive();
+	const bool bNewSufferingCold = bWantsColdProt && Protection != EClothProtection::Cold && !bNearCampfire && AttributeComponent->IsAlive();
 
 	if (bNewSufferingHeat != bSufferingHeat)
 	{

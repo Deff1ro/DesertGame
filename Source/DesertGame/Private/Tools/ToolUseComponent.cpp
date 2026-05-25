@@ -13,6 +13,7 @@
 #include "Kismet/KismetSystemLibrary.h"
 #include "Kismet/GameplayStatics.h"
 #include "Sound/SoundBase.h"
+#include "GameFramework/CharacterMovementComponent.h"
 
 DEFINE_LOG_CATEGORY(LogDesertTool);
 
@@ -30,6 +31,13 @@ void UToolUseComponent::BeginPlay()
 bool UToolUseComponent::RequestUseTool()
 {
 	if (!OwnerCharacter)
+	{
+		return false;
+	}
+
+	// Lock: ignore retriggers while a swing montage is still playing. Players
+	// mashing LMB during the axe animation should not restart it.
+	if (bIsSwinging)
 	{
 		return false;
 	}
@@ -61,10 +69,66 @@ bool UToolUseComponent::RequestUseTool()
 
 	ActiveToolType = Selected->ToolType;
 	ActiveToolData = Selected;
+	ActiveMontage = *Found;
 
-	AnimInst->Montage_Play(*Found);
+	const float Length = AnimInst->Montage_Play(ActiveMontage);
+	if (Length <= 0.f)
+	{
+		UE_LOG(LogDesertTool, Warning, TEXT("UToolUseComponent: Montage_Play returned 0 — skeleton or slot mismatch?"));
+		ActiveMontage = nullptr;
+		return false;
+	}
+
+	// Lock until the montage finishes so retriggers do nothing and the player
+	// can't walk through the swing.
+	bIsSwinging = true;
+	LockMovement();
+
+	FOnMontageEnded EndDelegate;
+	EndDelegate.BindUObject(this, &UToolUseComponent::OnSwingMontageEnded);
+	AnimInst->Montage_SetEndDelegate(EndDelegate, ActiveMontage);
+
 	UE_LOG(LogDesertTool, Log, TEXT("UToolUseComponent: playing montage for tool type %d"), (int32)ActiveToolType);
 	return true;
+}
+
+void UToolUseComponent::OnSwingMontageEnded(UAnimMontage* Montage, bool bInterrupted)
+{
+	if (Montage != ActiveMontage)
+	{
+		return;
+	}
+
+	bIsSwinging = false;
+	ActiveMontage = nullptr;
+	UnlockMovement();
+}
+
+void UToolUseComponent::LockMovement()
+{
+	if (!OwnerCharacter)
+	{
+		return;
+	}
+	if (UCharacterMovementComponent* CMC = OwnerCharacter->GetCharacterMovement())
+	{
+		CMC->StopMovementImmediately();
+		// Disable horizontal movement only — keep gravity so the player still
+		// stays grounded properly even if they were mid-jump (rare).
+		CMC->DisableMovement();
+	}
+}
+
+void UToolUseComponent::UnlockMovement()
+{
+	if (!OwnerCharacter)
+	{
+		return;
+	}
+	if (UCharacterMovementComponent* CMC = OwnerCharacter->GetCharacterMovement())
+	{
+		CMC->SetMovementMode(MOVE_Walking);
+	}
 }
 
 void UToolUseComponent::ArmTool()

@@ -9,6 +9,7 @@
 
 class USkeletalMeshComponent;
 class UCapsuleComponent;
+class UBoxComponent;
 class UAnimMontage;
 class UPrimitiveComponent;
 class UCameraShakeBase;
@@ -43,9 +44,18 @@ public:
 	// Tunable parameters (BP)
 	// ============================================================
 
-	// Delay between detecting prey and rising to attack.
+	// Delay between detecting prey and rising to attack. Worm tracks the prey's
+	// XY position throughout this window — see StrikeLeadTime.
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Worm|Timing", meta = (ClampMin = "0.0"))
 	float TelegraphDelay = 2.f;
+
+	// How "stale" the captured prey position should be when the worm erupts.
+	// In other words: the worm strikes where the prey was StrikeLeadTime seconds
+	// ago, giving the player exactly that much time to dodge by running.
+	// Must be <= TelegraphDelay (otherwise we'd need a position from before
+	// detection started — falls back to the earliest sample available).
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Worm|Timing", meta = (ClampMin = "0.0"))
+	float StrikeLeadTime = 1.f;
 
 	// How long the worm stays risen and dangerous.
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Worm|Timing", meta = (ClampMin = "0.1"))
@@ -141,9 +151,11 @@ public:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components")
 	TObjectPtr<USkeletalMeshComponent> MeshComponent;
 
-	// Buried trigger zone — sits above the mesh, detects prey overlapping the surface.
+	// Detection zone — a flat-ish box covering the area the worm patrols. The
+	// worm can erupt anywhere inside it (at BuriedLocation.Z). Size it in BP
+	// to match the patrol area.
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components")
-	TObjectPtr<UCapsuleComponent> DetectionTrigger;
+	TObjectPtr<UBoxComponent> DetectionBox;
 
 	// Kill capsule activated only during the Attacking state. Covers the worm's
 	// risen body. Adjustable in BP to tune to the mesh.
@@ -160,12 +172,27 @@ protected:
 	void OnDetectionBeginOverlap(UPrimitiveComponent* OverlappedComp, AActor* OtherActor,
 		UPrimitiveComponent* OtherComp, int32 OtherBodyIndex, bool bFromSweep, const FHitResult& SweepResult);
 
+	UFUNCTION()
+	void OnDetectionEndOverlap(UPrimitiveComponent* OverlappedComp, AActor* OtherActor,
+		UPrimitiveComponent* OtherComp, int32 OtherBodyIndex);
+
 private:
 	void StartTelegraph();
 	void StartRise();
 	void OnRiseComplete();
 	void StartBurrow();
 	void OnBurrowComplete();
+
+	// Sample current prey XY into the tracking buffer and trim old entries.
+	void SampleTrackedPosition(float WorldTimeSeconds);
+
+	// Returns the prey XY captured StrikeLeadTime seconds ago (or the oldest
+	// available sample if we don't have one that old). bOutHasSample = false
+	// if the buffer is empty.
+	FVector ResolveStrikePoint(float WorldTimeSeconds, bool& bOutHasSample) const;
+
+	// Picks any valid prey currently overlapping the detection box.
+	AActor* FindPreyInDetectionBox() const;
 
 	void StartCameraShake();
 	void StopCameraShake();
@@ -196,6 +223,26 @@ private:
 	FVector MotionStart = FVector::ZeroVector;
 	FVector MotionEnd = FVector::ZeroVector;
 	float MotionDuration = 0.f;
+
+	// One captured prey snapshot in the tracking buffer.
+	struct FTrackedSample
+	{
+		FVector Position = FVector::ZeroVector;
+		float TimeSeconds = 0.f;
+	};
+
+	// Ring-ish buffer of recent prey XY positions. Trimmed every tick so the
+	// oldest sample is always slightly older than StrikeLeadTime.
+	TArray<FTrackedSample> TrackedSamples;
+
+	// The actor we're currently tracking. Refreshed each tick from the box's
+	// overlap list. Cleared when no valid prey remains in the zone.
+	UPROPERTY()
+	TWeakObjectPtr<AActor> TrackedPrey;
+
+	// World location chosen as the strike point, captured at the moment we
+	// commit to the rise. Used to drive the rise interpolation.
+	FVector StrikeLocation = FVector::ZeroVector;
 
 	void SpawnLootDrops();
 };

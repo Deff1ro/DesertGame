@@ -8,6 +8,7 @@
 #include "Inventory/ItemDataAsset.h"
 #include "Components/SkeletalMeshComponent.h"
 #include "Components/CapsuleComponent.h"
+#include "Components/BoxComponent.h"
 #include "Animation/AnimInstance.h"
 #include "Animation/AnimMontage.h"
 #include "Camera/CameraShakeBase.h"
@@ -25,7 +26,6 @@ DEFINE_LOG_CATEGORY(LogDesertWorm);
 AWormEnemy::AWormEnemy()
 {
 	PrimaryActorTick.bCanEverTick = true;
-	PrimaryActorTick.bStartWithTickEnabled = false;
 
 	MeshComponent = CreateDefaultSubobject<USkeletalMeshComponent>(TEXT("MeshComponent"));
 	SetRootComponent(MeshComponent);
@@ -38,14 +38,16 @@ AWormEnemy::AWormEnemy()
 	MeshComponent->SetCollisionResponseToChannel(ECC_WorldDynamic, ECR_Ignore);
 	MeshComponent->SetCollisionResponseToChannel(ECC_Camera, ECR_Ignore);
 
-	DetectionTrigger = CreateDefaultSubobject<UCapsuleComponent>(TEXT("DetectionTrigger"));
-	DetectionTrigger->SetupAttachment(MeshComponent);
-	DetectionTrigger->SetCapsuleRadius(200.f);
-	DetectionTrigger->SetCapsuleHalfHeight(150.f);
-	DetectionTrigger->SetRelativeLocation(FVector(0.f, 0.f, 200.f));
-	DetectionTrigger->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
-	DetectionTrigger->SetCollisionResponseToAllChannels(ECR_Ignore);
-	DetectionTrigger->SetCollisionResponseToChannel(ECC_Pawn, ECR_Overlap);
+	// Wide, flat box covering the patrol area. Sized for a generous default; tune
+	// in BP per-instance. Sits above the buried mesh so prey walking on top of
+	// the ground overlaps it.
+	DetectionBox = CreateDefaultSubobject<UBoxComponent>(TEXT("DetectionBox"));
+	DetectionBox->SetupAttachment(MeshComponent);
+	DetectionBox->SetBoxExtent(FVector(1000.f, 1000.f, 100.f));
+	DetectionBox->SetRelativeLocation(FVector(0.f, 0.f, 200.f));
+	DetectionBox->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
+	DetectionBox->SetCollisionResponseToAllChannels(ECR_Ignore);
+	DetectionBox->SetCollisionResponseToChannel(ECC_Pawn, ECR_Overlap);
 
 	KillCapsule = CreateDefaultSubobject<UCapsuleComponent>(TEXT("KillCapsule"));
 	KillCapsule->SetupAttachment(MeshComponent);
@@ -65,9 +67,10 @@ void AWormEnemy::BeginPlay()
 	State = EWormState::Hidden;
 	CurrentHealth = MaxHealth;
 
-	if (DetectionTrigger)
+	if (DetectionBox)
 	{
-		DetectionTrigger->OnComponentBeginOverlap.AddDynamic(this, &AWormEnemy::OnDetectionBeginOverlap);
+		DetectionBox->OnComponentBeginOverlap.AddDynamic(this, &AWormEnemy::OnDetectionBeginOverlap);
+		DetectionBox->OnComponentEndOverlap.AddDynamic(this, &AWormEnemy::OnDetectionEndOverlap);
 	}
 }
 
@@ -103,9 +106,9 @@ void AWormEnemy::HandleDeath()
 	StopCameraShake();
 
 	// Disable all triggers/collision so the body can't ambush, kill, or be hit again.
-	if (DetectionTrigger)
+	if (DetectionBox)
 	{
-		DetectionTrigger->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+		DetectionBox->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 	}
 	if (KillCapsule)
 	{
@@ -126,6 +129,90 @@ void AWormEnemy::HandleDeath()
 	{
 		Destroy();
 	}
+}
+
+// ============================================================
+// Prey tracking
+// ============================================================
+
+void AWormEnemy::SampleTrackedPosition(float WorldTimeSeconds)
+{
+	if (!TrackedPrey.IsValid())
+	{
+		// No prey — discard old samples so we don't strike at stale ghosts.
+		TrackedSamples.Reset();
+		return;
+	}
+
+	FTrackedSample Sample;
+	Sample.Position = TrackedPrey->GetActorLocation();
+	Sample.TimeSeconds = WorldTimeSeconds;
+	TrackedSamples.Add(Sample);
+
+	// Trim entries older than StrikeLeadTime + small slack. Keep at least one
+	// sample even if it's "too old" so ResolveStrikePoint can always answer.
+	const float Cutoff = WorldTimeSeconds - (FMath::Max(0.f, StrikeLeadTime) + 0.5f);
+	int32 RemoveCount = 0;
+	while (RemoveCount + 1 < TrackedSamples.Num()
+		&& TrackedSamples[RemoveCount].TimeSeconds < Cutoff)
+	{
+		++RemoveCount;
+	}
+	if (RemoveCount > 0)
+	{
+		TrackedSamples.RemoveAt(0, RemoveCount);
+	}
+}
+
+FVector AWormEnemy::ResolveStrikePoint(float WorldTimeSeconds, bool& bOutHasSample) const
+{
+	bOutHasSample = false;
+
+	if (TrackedSamples.Num() == 0)
+	{
+		return FVector::ZeroVector;
+	}
+
+	const float TargetTime = WorldTimeSeconds - FMath::Max(0.f, StrikeLeadTime);
+
+	// Pick the newest sample that is still at or before TargetTime. If even the
+	// oldest sample is newer than TargetTime (the buffer is shorter than
+	// StrikeLeadTime), fall back to that oldest one — the player simply hasn't
+	// been tracked long enough.
+	const FTrackedSample* Picked = &TrackedSamples[0];
+	for (const FTrackedSample& S : TrackedSamples)
+	{
+		if (S.TimeSeconds <= TargetTime)
+		{
+			Picked = &S;
+		}
+		else
+		{
+			break;
+		}
+	}
+
+	bOutHasSample = true;
+	return Picked->Position;
+}
+
+AActor* AWormEnemy::FindPreyInDetectionBox() const
+{
+	if (!DetectionBox)
+	{
+		return nullptr;
+	}
+
+	TArray<AActor*> Overlapping;
+	DetectionBox->GetOverlappingActors(Overlapping);
+	for (AActor* Candidate : Overlapping)
+	{
+		if (IsValidPrey(Candidate))
+		{
+			return Candidate;
+		}
+	}
+	return nullptr;
 }
 
 void AWormEnemy::SpawnLootDrops()
@@ -185,6 +272,32 @@ void AWormEnemy::Tick(float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
 
+	const float NowSeconds = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.f;
+
+	// 1. Track prey position while the worm is dormant or telegraphing — these
+	// are the only states where the captured trajectory matters for the strike.
+	if (State == EWormState::Hidden || State == EWormState::Telegraphing)
+	{
+		// Refresh which prey we're tracking. The end-overlap handler clears
+		// TrackedPrey when the only known prey leaves the box; this catches the
+		// case where a different valid prey is still inside or has just entered.
+		if (!TrackedPrey.IsValid() || !IsValidPrey(TrackedPrey.Get()))
+		{
+			TrackedPrey = FindPreyInDetectionBox();
+		}
+
+		SampleTrackedPosition(NowSeconds);
+
+		// If we returned to Hidden after burrowing and prey is still in the
+		// zone, immediately re-arm. Wait one frame's worth of sampling so the
+		// strike-lead buffer isn't empty.
+		if (State == EWormState::Hidden && TrackedPrey.IsValid() && TrackedSamples.Num() > 0)
+		{
+			StartTelegraph();
+		}
+	}
+
+	// 2. Drive rise/burrow interpolation only during those phases.
 	if (State != EWormState::Rising && State != EWormState::Burrowing)
 	{
 		return;
@@ -213,19 +326,42 @@ void AWormEnemy::Tick(float DeltaSeconds)
 void AWormEnemy::OnDetectionBeginOverlap(UPrimitiveComponent* OverlappedComp, AActor* OtherActor,
 	UPrimitiveComponent* OtherComp, int32 OtherBodyIndex, bool bFromSweep, const FHitResult& SweepResult)
 {
-	if (State != EWormState::Hidden)
-	{
-		return;
-	}
 	if (!IsValidPrey(OtherActor))
 	{
 		return;
 	}
 
-	UE_LOG(LogDesertWorm, Log, TEXT("Worm '%s' — prey '%s' entered, telegraphing"),
-		*GetName(), *OtherActor->GetName());
+	// Always update the tracked prey on entry — even if we're already telegraphing
+	// (so a fresher prey can be picked up if the old one leaves mid-cycle).
+	if (!TrackedPrey.IsValid() || !IsValidPrey(TrackedPrey.Get()))
+	{
+		TrackedPrey = OtherActor;
+	}
 
-	StartTelegraph();
+	// Only trigger telegraphing from a dormant state. Tick will pick up sampling
+	// from here on.
+	if (State == EWormState::Hidden)
+	{
+		UE_LOG(LogDesertWorm, Log, TEXT("Worm '%s' — prey '%s' entered detection box, telegraphing"),
+			*GetName(), *OtherActor->GetName());
+		StartTelegraph();
+	}
+}
+
+void AWormEnemy::OnDetectionEndOverlap(UPrimitiveComponent* OverlappedComp, AActor* OtherActor,
+	UPrimitiveComponent* OtherComp, int32 OtherBodyIndex)
+{
+	if (!OtherActor)
+	{
+		return;
+	}
+
+	// Only care if the actor leaving was the one we were tracking. The next
+	// tick will look for any other valid prey still inside the box.
+	if (TrackedPrey.IsValid() && TrackedPrey.Get() == OtherActor)
+	{
+		TrackedPrey.Reset();
+	}
 }
 
 bool AWormEnemy::IsValidPrey(AActor* Other) const
@@ -263,11 +399,28 @@ void AWormEnemy::StartRise()
 {
 	State = EWormState::Rising;
 
-	MotionStart = BuriedLocation;
-	MotionEnd = BuriedLocation + FVector(0.f, 0.f, RiseDistance);
+	// Resolve where to erupt: the prey's position StrikeLeadTime seconds ago.
+	// If no sample is available (shouldn't happen with a non-empty buffer), fall
+	// back to the buried location so the worm still rises in place.
+	const float NowSeconds = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.f;
+	bool bHasSample = false;
+	const FVector ResolvedXY = ResolveStrikePoint(NowSeconds, bHasSample);
+
+	StrikeLocation = bHasSample
+		? FVector(ResolvedXY.X, ResolvedXY.Y, BuriedLocation.Z)
+		: BuriedLocation;
+
+	UE_LOG(LogDesertWorm, Log, TEXT("Worm '%s' — striking at (%.0f, %.0f) (%s)"),
+		*GetName(), StrikeLocation.X, StrikeLocation.Y,
+		bHasSample ? TEXT("from buffer") : TEXT("fallback: buried"));
+
+	// Teleport the buried mesh to under the strike point before rising.
+	SetActorLocation(StrikeLocation);
+
+	MotionStart = StrikeLocation;
+	MotionEnd = StrikeLocation + FVector(0.f, 0.f, RiseDistance);
 	MotionDuration = RiseDuration;
 	MotionElapsed = 0.f;
-	SetActorTickEnabled(true);
 
 	if (EmergeSound)
 	{
@@ -282,7 +435,6 @@ void AWormEnemy::StartRise()
 void AWormEnemy::OnRiseComplete()
 {
 	State = EWormState::Attacking;
-	SetActorTickEnabled(false);
 
 	// Camera shake stops once the worm is fully out of the ground
 	StopCameraShake();
@@ -379,17 +531,23 @@ void AWormEnemy::StartBurrow()
 		KillCapsule->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 	}
 
-	MotionStart = GetActorLocation();
-	MotionEnd = BuriedLocation;
+	// Burrow straight down from wherever we struck — looks more natural than
+	// snapping back to the centre while still visible. Once fully buried the
+	// next StartRise() will teleport under the next chosen strike point.
+	const FVector CurrentLoc = GetActorLocation();
+	MotionStart = CurrentLoc;
+	MotionEnd = FVector(CurrentLoc.X, CurrentLoc.Y, BuriedLocation.Z);
 	MotionDuration = BurrowDuration;
 	MotionElapsed = 0.f;
-	SetActorTickEnabled(true);
 }
 
 void AWormEnemy::OnBurrowComplete()
 {
-	SetActorTickEnabled(false);
 	State = EWormState::Hidden;
+
+	// Return the mesh to the central buried position so it stays under its
+	// detection box footprint while dormant.
+	SetActorLocation(BuriedLocation);
 
 	// Worm is fully buried — kill the looping animation.
 	StopRiseMontageLoop();
