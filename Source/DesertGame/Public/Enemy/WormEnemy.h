@@ -61,9 +61,16 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Worm|Timing", meta = (ClampMin = "0.1"))
 	float AttackDuration = 5.f;
 
-	// How far (cm) the mesh moves up when attacking, then back down when re-burrowing.
+	// How high (cm) above the prey's captured Z the worm's top point ends up
+	// when the rise animation completes. Visible eruption height.
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Worm|Motion", meta = (ClampMin = "0.0"))
 	float RiseDistance = 200.f;
+
+	// How deep (cm) below the prey's captured Z the worm spawns BEFORE rising,
+	// i.e. how far underground it starts. Tweak alongside RiseDistance to
+	// control the total motion travel.
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Worm|Motion", meta = (ClampMin = "0.0"))
+	float BurySinkDepth = 200.f;
 
 	// Seconds it takes to smoothly rise from buried to risen.
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Worm|Motion", meta = (ClampMin = "0.05"))
@@ -175,6 +182,14 @@ protected:
 	UFUNCTION()
 	void OnDetectionEndOverlap(UPrimitiveComponent* OverlappedComp, AActor* OtherActor,
 		UPrimitiveComponent* OtherComp, int32 OtherBodyIndex);
+
+	// Fired by the KillCapsule's own collision events whenever a pawn enters it.
+	// Deals StrikeDamage immediately. Used instead of a one-shot overlap query
+	// so the worm hits anything that wanders into its mouth during the entire
+	// AttackDuration window, not just at the moment it finishes rising.
+	UFUNCTION()
+	void OnKillCapsuleBeginOverlap(UPrimitiveComponent* OverlappedComp, AActor* OtherActor,
+		UPrimitiveComponent* OtherComp, int32 OtherBodyIndex, bool bFromSweep, const FHitResult& SweepResult);
 
 private:
 	void StartTelegraph();

@@ -72,6 +72,11 @@ void AWormEnemy::BeginPlay()
 		DetectionBox->OnComponentBeginOverlap.AddDynamic(this, &AWormEnemy::OnDetectionBeginOverlap);
 		DetectionBox->OnComponentEndOverlap.AddDynamic(this, &AWormEnemy::OnDetectionEndOverlap);
 	}
+
+	if (KillCapsule)
+	{
+		KillCapsule->OnComponentBeginOverlap.AddDynamic(this, &AWormEnemy::OnKillCapsuleBeginOverlap);
+	}
 }
 
 bool AWormEnemy::TakeDamageAmount(float Amount)
@@ -399,26 +404,29 @@ void AWormEnemy::StartRise()
 {
 	State = EWormState::Rising;
 
-	// Resolve where to erupt: the prey's position StrikeLeadTime seconds ago.
-	// If no sample is available (shouldn't happen with a non-empty buffer), fall
-	// back to the buried location so the worm still rises in place.
+	// Resolve where to erupt: the prey's full 3D position StrikeLeadTime seconds
+	// ago. The Z component already reflects the terrain under the player at
+	// that moment, so we don't need a separate ground-trace.
 	const float NowSeconds = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.f;
 	bool bHasSample = false;
-	const FVector ResolvedXY = ResolveStrikePoint(NowSeconds, bHasSample);
+	const FVector PreySnapshot = ResolveStrikePoint(NowSeconds, bHasSample);
 
-	StrikeLocation = bHasSample
-		? FVector(ResolvedXY.X, ResolvedXY.Y, BuriedLocation.Z)
-		: BuriedLocation;
+	StrikeLocation = bHasSample ? PreySnapshot : BuriedLocation;
 
-	UE_LOG(LogDesertWorm, Log, TEXT("Worm '%s' — striking at (%.0f, %.0f) (%s)"),
-		*GetName(), StrikeLocation.X, StrikeLocation.Y,
+	UE_LOG(LogDesertWorm, Log, TEXT("Worm '%s' — striking at (%.0f, %.0f, %.0f) (%s)"),
+		*GetName(), StrikeLocation.X, StrikeLocation.Y, StrikeLocation.Z,
 		bHasSample ? TEXT("from buffer") : TEXT("fallback: buried"));
 
-	// Teleport the buried mesh to under the strike point before rising.
-	SetActorLocation(StrikeLocation);
+	// Spawn at BurySinkDepth below the prey's Z, then physically lift by exactly
+	// RiseDistance. BurySinkDepth shifts both start and end together; only
+	// RiseDistance controls the actual upward travel.
+	const FVector StartLoc = StrikeLocation - FVector(0.f, 0.f, BurySinkDepth);
+	const FVector EndLoc = StartLoc + FVector(0.f, 0.f, RiseDistance);
 
-	MotionStart = StrikeLocation;
-	MotionEnd = StrikeLocation + FVector(0.f, 0.f, RiseDistance);
+	SetActorLocation(StartLoc);
+
+	MotionStart = StartLoc;
+	MotionEnd = EndLoc;
 	MotionDuration = RiseDuration;
 	MotionElapsed = 0.f;
 
@@ -439,75 +447,33 @@ void AWormEnemy::OnRiseComplete()
 	// Camera shake stops once the worm is fully out of the ground
 	StopCameraShake();
 
+	// Activate the kill capsule. Its BeginOverlap fires OnKillCapsuleBeginOverlap
+	// — anything already touching the capsule when it goes live will count, and
+	// anything that wanders into it during AttackDuration will too. We also do
+	// one explicit overlap check now to catch the initial-contact case (UE only
+	// fires BeginOverlap on state *changes*).
 	if (KillCapsule)
 	{
 		KillCapsule->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
-	}
+		KillCapsule->UpdateOverlaps();
 
-	// Geometry-based overlap query: doesn't depend on the kill capsule having
-	// accumulated overlaps yet (it was just enabled this frame). We sweep the
-	// world directly with the kill capsule's current shape and transform.
-	UWorld* World = GetWorld();
-	if (World && KillCapsule)
-	{
-		const FVector CapsuleLoc = KillCapsule->GetComponentLocation();
-		const FQuat CapsuleRot = KillCapsule->GetComponentQuat();
-		const float Radius = KillCapsule->GetScaledCapsuleRadius();
-		const float HalfHeight = KillCapsule->GetScaledCapsuleHalfHeight();
-
-		FCollisionQueryParams Params;
-		Params.AddIgnoredActor(this);
-
-		TArray<FOverlapResult> Overlaps;
-		World->OverlapMultiByChannel(
-			Overlaps,
-			CapsuleLoc,
-			CapsuleRot,
-			ECC_Pawn,
-			FCollisionShape::MakeCapsule(Radius, HalfHeight),
-			Params);
+		TArray<AActor*> AlreadyInside;
+		KillCapsule->GetOverlappingActors(AlreadyInside);
+		for (AActor* Victim : AlreadyInside)
+		{
+			OnKillCapsuleBeginOverlap(KillCapsule, Victim, nullptr, INDEX_NONE, false, FHitResult());
+		}
 
 		if (bDebugDrawKillCapsule)
 		{
 			UKismetSystemLibrary::DrawDebugCapsule(
-				World,
-				CapsuleLoc,
-				HalfHeight,
-				Radius,
-				CapsuleRot.Rotator(),
-				Overlaps.Num() > 0 ? FLinearColor::Red : FLinearColor::Yellow,
-				2.0f);
-		}
-
-		TSet<AActor*> Hit;
-		for (const FOverlapResult& O : Overlaps)
-		{
-			AActor* Victim = O.GetActor();
-			if (!IsValidPrey(Victim) || Hit.Contains(Victim))
-			{
-				continue;
-			}
-			Hit.Add(Victim);
-
-			if (AProtagonistCharacter* Player = Cast<AProtagonistCharacter>(Victim))
-			{
-				if (UAttributeComponent* Attr = Player->GetAttributeComponent())
-				{
-					Attr->ApplyDamage(StrikeDamage);
-					UE_LOG(LogDesertWorm, Log, TEXT("Worm '%s' — killed player"), *GetName());
-				}
-			}
-			else if (AEnemyCharacter* EnemyChar = Cast<AEnemyCharacter>(Victim))
-			{
-				EnemyChar->TakeDamageAmount(StrikeDamage);
-				UE_LOG(LogDesertWorm, Log, TEXT("Worm '%s' — devoured enemy '%s'"),
-					*GetName(), *EnemyChar->GetName());
-			}
-
-			if (StrikeHitSound)
-			{
-				UGameplayStatics::PlaySoundAtLocation(this, StrikeHitSound, Victim->GetActorLocation());
-			}
+				GetWorld(),
+				KillCapsule->GetComponentLocation(),
+				KillCapsule->GetScaledCapsuleHalfHeight(),
+				KillCapsule->GetScaledCapsuleRadius(),
+				KillCapsule->GetComponentRotation(),
+				FLinearColor::Red,
+				FMath::Max(0.1f, AttackDuration));
 		}
 	}
 
@@ -522,6 +488,36 @@ void AWormEnemy::OnRiseComplete()
 	UE_LOG(LogDesertWorm, Log, TEXT("Worm '%s' — strike active"), *GetName());
 }
 
+void AWormEnemy::OnKillCapsuleBeginOverlap(UPrimitiveComponent* OverlappedComp, AActor* OtherActor,
+	UPrimitiveComponent* OtherComp, int32 OtherBodyIndex, bool bFromSweep, const FHitResult& SweepResult)
+{
+	if (State != EWormState::Attacking || !IsValidPrey(OtherActor))
+	{
+		return;
+	}
+
+	if (AProtagonistCharacter* Player = Cast<AProtagonistCharacter>(OtherActor))
+	{
+		if (UAttributeComponent* Attr = Player->GetAttributeComponent())
+		{
+			Attr->ApplyDamage(StrikeDamage);
+			UE_LOG(LogDesertWorm, Log, TEXT("Worm '%s' — bit player for %.0f"),
+				*GetName(), StrikeDamage);
+		}
+	}
+	else if (AEnemyCharacter* EnemyChar = Cast<AEnemyCharacter>(OtherActor))
+	{
+		EnemyChar->TakeDamageAmount(StrikeDamage);
+		UE_LOG(LogDesertWorm, Log, TEXT("Worm '%s' — devoured enemy '%s'"),
+			*GetName(), *EnemyChar->GetName());
+	}
+
+	if (StrikeHitSound)
+	{
+		UGameplayStatics::PlaySoundAtLocation(this, StrikeHitSound, OtherActor->GetActorLocation());
+	}
+}
+
 void AWormEnemy::StartBurrow()
 {
 	State = EWormState::Burrowing;
@@ -532,11 +528,11 @@ void AWormEnemy::StartBurrow()
 	}
 
 	// Burrow straight down from wherever we struck — looks more natural than
-	// snapping back to the centre while still visible. Once fully buried the
-	// next StartRise() will teleport under the next chosen strike point.
+	// snapping back to the centre while still visible. Final Z is BurySinkDepth
+	// below the strike's Z (mirror of where StartRise placed us).
 	const FVector CurrentLoc = GetActorLocation();
 	MotionStart = CurrentLoc;
-	MotionEnd = FVector(CurrentLoc.X, CurrentLoc.Y, BuriedLocation.Z);
+	MotionEnd = FVector(CurrentLoc.X, CurrentLoc.Y, StrikeLocation.Z - BurySinkDepth);
 	MotionDuration = BurrowDuration;
 	MotionElapsed = 0.f;
 }
