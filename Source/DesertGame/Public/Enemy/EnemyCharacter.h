@@ -11,6 +11,7 @@ class UAnimMontage;
 class UBehaviorTree;
 class UEnemyAttackComponent;
 class AItemActor;
+enum class EDayNightPhase : uint8;
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE(FOnEnemyDied);
 
@@ -108,14 +109,44 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "AI")
 	TObjectPtr<UBehaviorTree> BehaviorTree;
 
+	// ============================================================
+	// Audio
+	// ============================================================
+
+	// Sound played the first moment this enemy spots the player (aggro start).
+	// Configurable per-species — set in BP_Hyena, BP_Ghost, etc.
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "AI|Audio")
+	TObjectPtr<class USoundBase> SpotPlayerSound;
+
+	// ============================================================
+	// Day/Night spawn rule
+	// ============================================================
+
+	// If true (default) this enemy only exists at night: invisible/disabled
+	// during the day, reactivated (HP restored) at night. Place an instance on
+	// the level and the day/night manager toggles it for you. Set to false to
+	// keep the enemy always-present regardless of phase.
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "AI|DayNight")
+	bool bNightOnly = true;
+
 protected:
 	// Called once when health drops to zero. Default implementation disables AI,
 	// disables collision and destroys the actor after a short delay so death
 	// montages (if any) can play.
 	virtual void HandleDeath();
 
+	// Toggles the enemy's "presence". When deactivated: hidden, collision off,
+	// AI stopped. When activated: HP restored, visible again, AI resumed.
+	void SetNightActive(bool bNewActive);
+
 private:
 	int32 CurrentPatrolIndex = 0;
 
 	void SpawnLootDrops();
+
+	UFUNCTION()
+	void HandleDayNightPhaseChanged(EDayNightPhase NewPhase);
+
+	// True after we hooked SetNightActive(false) — used so we don't double-toggle.
+	bool bDeactivatedByDayNight = false;
 };

@@ -38,12 +38,10 @@ public:
 	UPROPERTY(EditDefaultsOnly, Category = "AI", meta = (ClampMin = "0.5"))
 	float InvestigationTimeout = 6.f;
 
-	// Sound played when this enemy first spots the player (aggro start).
-	UPROPERTY(EditDefaultsOnly, Category = "AI|Audio")
-	TObjectPtr<class USoundBase> SpotPlayerSound;
-
 	// Combat music that starts when the enemy aggros and stops when it loses
 	// the player. Plays as a separate 2D track on top of the day/night ambient.
+	// (Per-species spot-player sound is configured on the enemy pawn itself —
+	// see AEnemyCharacter::SpotPlayerSound.)
 	UPROPERTY(EditDefaultsOnly, Category = "AI|Audio")
 	TObjectPtr<class USoundBase> CombatMusic;
 

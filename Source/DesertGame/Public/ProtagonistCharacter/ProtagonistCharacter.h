@@ -21,6 +21,8 @@ class UInventoryComponent;
 class UToolUseComponent;
 class AItemActor;
 class UInventoryHubWidget;
+class UDeathMenuWidget;
+class UPauseMenuWidget;
 class UStaticMeshComponent;
 class USkeletalMesh;
 
@@ -194,6 +196,9 @@ protected:
 	UPROPERTY(EditDefaultsOnly, Category = "Input")
 	TObjectPtr<UInputAction> ToggleInventoryAction;
 
+	UPROPERTY(EditDefaultsOnly, Category = "Input")
+	TObjectPtr<UInputAction> PauseAction;
+
 	// Hotbar slot 1..4 — bind to keys 1, 2, 3, 4 in your IMC
 	UPROPERTY(EditDefaultsOnly, Category = "Input|Hotbar")
 	TObjectPtr<UInputAction> HotbarSlot1Action;
@@ -209,6 +214,14 @@ protected:
 
 	UPROPERTY(EditDefaultsOnly, Category = "UI")
 	TSubclassOf<UInventoryHubWidget> HubWidgetClass;
+
+	// Widget shown when the player dies (HP reaches 0). Spawned by C++.
+	UPROPERTY(EditDefaultsOnly, Category = "UI")
+	TSubclassOf<UDeathMenuWidget> DeathMenuWidgetClass;
+
+	// Widget shown on Pause input (Esc). Spawned by C++.
+	UPROPERTY(EditDefaultsOnly, Category = "UI")
+	TSubclassOf<UPauseMenuWidget> PauseMenuWidgetClass;
 
 	// ============================================================
 	// Input Handlers
@@ -228,6 +241,15 @@ protected:
 	void OnSaveGameInput();
 	void OnInteractInput();
 	void OnToggleInventoryInput();
+	void OnPauseInput();
+
+public:
+	// Opens / closes the pause menu. Public so the pause widget itself can ask
+	// the character to dismiss it (Resume button).
+	UFUNCTION(BlueprintCallable, Category = "UI")
+	void TogglePauseMenu();
+
+protected:
 	void OnHotbarSlot1();
 	void OnHotbarSlot2();
 	void OnHotbarSlot3();
@@ -243,6 +265,11 @@ protected:
 	UFUNCTION()
 	void HandleClothChanged();
 
+	UFUNCTION()
+	void HandlePlayerDeath();
+
+	void ShowDeathMenu();
+
 	// True when the player is currently being hurt by the environment (day without
 	// heat protection, or night without cold protection). HUD filters show while
 	// this is true.
@@ -252,11 +279,20 @@ protected:
 	UFUNCTION(BlueprintPure, Category = "Survival")
 	bool IsSufferingFromCold() const { return bSufferingCold; }
 
-	// Sound played for a single footstep. Trigger this from an AnimNotify on the
-	// walk/run animations at heel-touch frames, or call from BP. Uses 2D location
-	// at the character's feet.
+	// Sound played for a single footstep. Auto-triggers while the character is
+	// grounded and moving — see FootstepStrideCm / FootstepSprintStrideCm.
 	UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "Audio")
 	TObjectPtr<class USoundBase> FootstepSound;
+
+	// Distance (cm) the character has to travel between footstep sounds while
+	// walking / running. Lower = more frequent footsteps.
+	UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "Audio", meta = (ClampMin = "10.0"))
+	float FootstepStrideCm = 180.f;
+
+	// Stride distance (cm) used while sprinting. Usually a bit longer than
+	// FootstepStrideCm so the cadence feels right at higher speed.
+	UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "Audio", meta = (ClampMin = "10.0"))
+	float FootstepSprintStrideCm = 240.f;
 
 	UFUNCTION(BlueprintCallable, Category = "Audio")
 	void PlayFootstepSound();
@@ -275,6 +311,11 @@ private:
 	// unprotected-weather HP damage if appropriate.
 	void TickEnvironmentEffects(float DeltaTime);
 
+	// Per-tick: accumulates ground travel distance and fires FootstepSound at
+	// FootstepStrideCm intervals.
+	void TickFootsteps(float DeltaTime);
+	float DistanceSinceLastFootstep = 0.f;
+
 	bool bSufferingHeat = false;
 	bool bSufferingCold = false;
 	// Refreshes body mesh / cloak based on the current cloth slot contents.
@@ -287,7 +328,15 @@ private:
 	UPROPERTY()
 	TObjectPtr<UInventoryHubWidget> HubWidgetInstance;
 
+	UPROPERTY()
+	TObjectPtr<UDeathMenuWidget> DeathMenuInstance;
+
+	UPROPERTY()
+	TObjectPtr<UPauseMenuWidget> PauseMenuInstance;
+
 	bool bIsInventoryOpen = false;
+	bool bIsPauseMenuOpen = false;
+	bool bIsDead = false;
 
 	// Cached at BeginPlay so we can restore it when a body-swap outfit is removed.
 	UPROPERTY()

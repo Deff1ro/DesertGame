@@ -3,8 +3,34 @@
 #include "UI/MainMenuWidget.h"
 #include "Core/DesertGameInstance.h"
 #include "SaveSystem/DesertSaveGame.h"
+#include "Components/AudioComponent.h"
+#include "Sound/SoundBase.h"
 #include "Kismet/GameplayStatics.h"
 #include "Kismet/KismetSystemLibrary.h"
+
+void UMainMenuWidget::NativeConstruct()
+{
+	Super::NativeConstruct();
+
+	if (BackgroundMusic && !BackgroundMusicComponent)
+	{
+		BackgroundMusicComponent = UGameplayStatics::SpawnSound2D(
+			this, BackgroundMusic, /*VolumeMultiplier*/ 1.f, /*PitchMultiplier*/ 1.f,
+			/*StartTime*/ 0.f, /*ConcurrencySettings*/ nullptr, /*bPersistAcrossLevelTransition*/ false,
+			/*bAutoDestroy*/ false);
+	}
+}
+
+void UMainMenuWidget::NativeDestruct()
+{
+	if (BackgroundMusicComponent)
+	{
+		BackgroundMusicComponent->Stop();
+		BackgroundMusicComponent = nullptr;
+	}
+
+	Super::NativeDestruct();
+}
 
 void UMainMenuWidget::OnNewGameClicked()
 {

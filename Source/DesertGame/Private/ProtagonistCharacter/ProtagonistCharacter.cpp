@@ -19,6 +19,8 @@
 #include "Inventory/ItemDataAsset.h"
 #include "Tools/ToolUseComponent.h"
 #include "UI/InventoryHubWidget.h"
+#include "UI/DeathMenuWidget.h"
+#include "UI/PauseMenuWidget.h"
 #include "Blueprint/UserWidget.h"
 #include "Components/StaticMeshComponent.h"
 #include "Camera/PlayerSpringArmComponent.h"
@@ -120,6 +122,7 @@ void AProtagonistCharacter::BeginPlay()
 	if (AttributeComponent)
 	{
 		AttributeComponent->OnStaminaDepleted.AddDynamic(this, &AProtagonistCharacter::HandleStaminaDepleted);
+		AttributeComponent->OnDeath.AddDynamic(this, &AProtagonistCharacter::HandlePlayerDeath);
 	}
 
 	// Attach equipped tool mesh to the correct socket — must happen after Super::BeginPlay
@@ -193,6 +196,7 @@ void AProtagonistCharacter::Tick(float DeltaTime)
 	UpdateMaxSpeed();
 
 	TickEnvironmentEffects(DeltaTime);
+	TickFootsteps(DeltaTime);
 }
 
 void AProtagonistCharacter::TickEnvironmentEffects(float DeltaTime)
@@ -333,6 +337,11 @@ void AProtagonistCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInp
 	if (ToggleInventoryAction)
 	{
 		EnhancedInput->BindAction(ToggleInventoryAction, ETriggerEvent::Started, this, &AProtagonistCharacter::OnToggleInventoryInput);
+	}
+
+	if (PauseAction)
+	{
+		EnhancedInput->BindAction(PauseAction, ETriggerEvent::Started, this, &AProtagonistCharacter::OnPauseInput);
 	}
 
 	if (HotbarSlot1Action)
@@ -508,6 +517,46 @@ void AProtagonistCharacter::PlayFootstepSound()
 	if (FootstepSound)
 	{
 		UGameplayStatics::PlaySoundAtLocation(this, FootstepSound, GetActorLocation());
+	}
+}
+
+void AProtagonistCharacter::TickFootsteps(float DeltaTime)
+{
+	if (!FootstepSound)
+	{
+		return;
+	}
+
+	// Only on the ground — no footstep sounds while falling/jumping.
+	UCharacterMovementComponent* CMC = GetCharacterMovement();
+	if (!CMC || !CMC->IsMovingOnGround())
+	{
+		DistanceSinceLastFootstep = 0.f;
+		return;
+	}
+
+	// Use horizontal speed so vertical bobs don't add to the stride budget.
+	const FVector Velocity = GetVelocity();
+	const float HorizontalSpeed = FVector(Velocity.X, Velocity.Y, 0.f).Size();
+
+	// Idle / barely moving: reset so the first step after resuming movement
+	// fires shortly, not "however much travel was banked before the stop".
+	if (HorizontalSpeed < 10.f)
+	{
+		DistanceSinceLastFootstep = 0.f;
+		return;
+	}
+
+	DistanceSinceLastFootstep += HorizontalSpeed * DeltaTime;
+
+	const float Stride = (CurrentGaitState == EGaitState::Sprint)
+		? FootstepSprintStrideCm
+		: FootstepStrideCm;
+
+	if (Stride > 0.f && DistanceSinceLastFootstep >= Stride)
+	{
+		DistanceSinceLastFootstep = 0.f;
+		PlayFootstepSound();
 	}
 }
 
@@ -696,6 +745,119 @@ void AProtagonistCharacter::OnToggleInventoryInput()
 
 		bIsInventoryOpen = false;
 	}
+}
+
+void AProtagonistCharacter::OnPauseInput()
+{
+	// Ignore pause while dead — the death menu owns the screen.
+	if (bIsDead)
+	{
+		return;
+	}
+	TogglePauseMenu();
+}
+
+void AProtagonistCharacter::TogglePauseMenu()
+{
+	APlayerController* PC = Cast<APlayerController>(GetController());
+	if (!PC)
+	{
+		return;
+	}
+
+	if (!bIsPauseMenuOpen)
+	{
+		if (!PauseMenuWidgetClass)
+		{
+			UE_LOG(LogTemp, Warning, TEXT("PauseMenuWidgetClass not set on ProtagonistCharacter"));
+			return;
+		}
+
+		if (!PauseMenuInstance)
+		{
+			PauseMenuInstance = CreateWidget<UPauseMenuWidget>(PC, PauseMenuWidgetClass);
+		}
+		if (!PauseMenuInstance)
+		{
+			return;
+		}
+
+		PauseMenuInstance->AddToViewport(100);
+
+		FInputModeGameAndUI Mode;
+		Mode.SetWidgetToFocus(PauseMenuInstance->TakeWidget());
+		Mode.SetLockMouseToViewportBehavior(EMouseLockMode::DoNotLock);
+		PC->SetInputMode(Mode);
+		PC->SetShowMouseCursor(true);
+
+		UGameplayStatics::SetGamePaused(this, true);
+		bIsPauseMenuOpen = true;
+	}
+	else
+	{
+		if (PauseMenuInstance)
+		{
+			PauseMenuInstance->RemoveFromParent();
+		}
+
+		UGameplayStatics::SetGamePaused(this, false);
+
+		FInputModeGameOnly Mode;
+		PC->SetInputMode(Mode);
+		PC->SetShowMouseCursor(false);
+
+		bIsPauseMenuOpen = false;
+	}
+}
+
+void AProtagonistCharacter::HandlePlayerDeath()
+{
+	if (bIsDead)
+	{
+		return;
+	}
+	bIsDead = true;
+
+	// If the pause menu happened to be open at the moment of death, close it
+	// first so we don't stack two modal widgets.
+	if (bIsPauseMenuOpen && PauseMenuInstance)
+	{
+		PauseMenuInstance->RemoveFromParent();
+		bIsPauseMenuOpen = false;
+	}
+
+	// Stop the world so the player can't keep getting hit / moved while the
+	// death screen is up.
+	UGameplayStatics::SetGamePaused(this, true);
+
+	ShowDeathMenu();
+}
+
+void AProtagonistCharacter::ShowDeathMenu()
+{
+	APlayerController* PC = Cast<APlayerController>(GetController());
+	if (!PC || !DeathMenuWidgetClass)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("DeathMenuWidgetClass not set on ProtagonistCharacter"));
+		return;
+	}
+
+	if (!DeathMenuInstance)
+	{
+		DeathMenuInstance = CreateWidget<UDeathMenuWidget>(PC, DeathMenuWidgetClass);
+	}
+	if (!DeathMenuInstance)
+	{
+		return;
+	}
+
+	DeathMenuInstance->AddToViewport(200);
+
+	FInputModeUIOnly Mode;
+	Mode.SetWidgetToFocus(DeathMenuInstance->TakeWidget());
+	Mode.SetLockMouseToViewportBehavior(EMouseLockMode::DoNotLock);
+	PC->SetInputMode(Mode);
+	PC->SetShowMouseCursor(true);
 }
 
 void AProtagonistCharacter::SetCurrentInteractable(AItemActor* Item)

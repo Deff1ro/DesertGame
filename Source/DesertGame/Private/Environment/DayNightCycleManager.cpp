@@ -8,6 +8,8 @@
 #include "Kismet/GameplayStatics.h"
 #include "Sound/SoundBase.h"
 #include "Components/AudioComponent.h"
+#include "Core/DesertGameInstance.h"
+#include "ProtagonistCharacter/ProtagonistCharacter.h"
 
 DEFINE_LOG_CATEGORY(LogDayNight);
 
@@ -59,7 +61,44 @@ void ADayNightCycleManager::EnterPhase(EDayNightPhase NewPhase, bool bForceBroad
 			NewPhase == EDayNightPhase::Day ? TEXT("Day") : TEXT("Night"));
 		PlayPhaseMusic();
 		OnPhaseChanged.Broadcast(CurrentPhase);
+
+		// A full day = wrapping back to StartingPhase after at least one real
+		// transition. bForceBroadcast is the initial BeginPlay entry — exclude
+		// that so we don't "save day 0" at level start.
+		if (!bForceBroadcast && NewPhase == StartingPhase)
+		{
+			++CompletedDayCount;
+			UE_LOG(LogDayNight, Log, TEXT("DayNightCycle: full cycle completed (day %d)"), CompletedDayCount);
+			OnFullDayCompleted.Broadcast(CompletedDayCount);
+
+			if (bAutoSaveOnFullCycle)
+			{
+				TriggerAutoSave();
+			}
+		}
 	}
+}
+
+void ADayNightCycleManager::TriggerAutoSave()
+{
+	UDesertGameInstance* GI = GetGameInstance<UDesertGameInstance>();
+	if (!GI)
+	{
+		UE_LOG(LogDayNight, Warning, TEXT("AutoSave skipped: no UDesertGameInstance"));
+		return;
+	}
+
+	APawn* PlayerPawn = UGameplayStatics::GetPlayerPawn(this, 0);
+	AProtagonistCharacter* Player = Cast<AProtagonistCharacter>(PlayerPawn);
+	if (!Player)
+	{
+		UE_LOG(LogDayNight, Warning, TEXT("AutoSave skipped: player pawn is not AProtagonistCharacter"));
+		return;
+	}
+
+	const bool bOk = GI->SaveGame(Player);
+	UE_LOG(LogDayNight, Log, TEXT("AutoSave on day %d: %s"),
+		CompletedDayCount, bOk ? TEXT("OK") : TEXT("FAILED"));
 }
 
 void ADayNightCycleManager::PlayPhaseMusic()
