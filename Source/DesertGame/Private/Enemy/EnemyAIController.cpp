@@ -136,11 +136,11 @@ void AEnemyAIController::OnTargetPerceptionUpdated(AActor* Actor, FAIStimulus St
 		// First-time aggro this chase: bark + combat music.
 		if (!bWasAggroed)
 		{
-			if (SpotPlayerSound)
+			if (AEnemyCharacter* EnemyChar = Cast<AEnemyCharacter>(GetPawn()))
 			{
-				if (APawn* MyPawn = GetPawn())
+				if (EnemyChar->SpotPlayerSound)
 				{
-					UGameplayStatics::PlaySoundAtLocation(this, SpotPlayerSound, MyPawn->GetActorLocation());
+					UGameplayStatics::PlaySoundAtLocation(this, EnemyChar->SpotPlayerSound, EnemyChar->GetActorLocation());
 				}
 			}
 			if (CombatMusic && !CombatMusicComponent)

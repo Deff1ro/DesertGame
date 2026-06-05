@@ -3,6 +3,7 @@
 #include "Enemy/EnemyCharacter.h"
 #include "Enemy/EnemyAIController.h"
 #include "Enemy/EnemyAttackComponent.h"
+#include "Environment/DayNightCycleManager.h"
 #include "Inventory/ItemActor.h"
 #include "Inventory/ItemDataAsset.h"
 #include "Components/CapsuleComponent.h"
@@ -49,6 +50,23 @@ void AEnemyCharacter::BeginPlay()
 	if (USkeletalMeshComponent* SkelMesh = GetMesh())
 	{
 		SkelMesh->SetCollisionResponseToChannel(ECC_Camera, ECR_Ignore);
+	}
+
+	// Day/Night gating: subscribe to phase changes and align immediately with the
+	// current phase. Enemies placed on the level act as "spawn anchors" — they
+	// disappear during the day and come back at night.
+	if (bNightOnly)
+	{
+		if (ADayNightCycleManager* Cycle = ADayNightCycleManager::Get(this))
+		{
+			Cycle->OnPhaseChanged.AddDynamic(this, &AEnemyCharacter::HandleDayNightPhaseChanged);
+
+			// Snap to current phase right away.
+			if (Cycle->IsDay())
+			{
+				SetNightActive(false);
+			}
+		}
 	}
 }
 
@@ -152,6 +170,74 @@ void AEnemyCharacter::SpawnLootDrops()
 			const FVector Impulse = LateralDir * LateralStrength + FVector(0.f, 0.f, UpwardStrength);
 
 			Item->LaunchAsDrop(Impulse);
+		}
+	}
+}
+
+void AEnemyCharacter::HandleDayNightPhaseChanged(EDayNightPhase NewPhase)
+{
+	if (!bNightOnly)
+	{
+		return;
+	}
+	SetNightActive(NewPhase == EDayNightPhase::Night);
+}
+
+void AEnemyCharacter::SetNightActive(bool bNewActive)
+{
+	if (bNewActive)
+	{
+		if (!bDeactivatedByDayNight)
+		{
+			return; // already active
+		}
+		bDeactivatedByDayNight = false;
+
+		// Fresh enemy for the new night: full HP, visible, AI back on.
+		CurrentHealth = MaxHealth;
+		SetActorHiddenInGame(false);
+		SetActorEnableCollision(true);
+
+		if (UCharacterMovementComponent* CMC = GetCharacterMovement())
+		{
+			CMC->SetMovementMode(MOVE_Walking);
+		}
+		if (AAIController* AI = Cast<AAIController>(GetController()))
+		{
+			if (UBrainComponent* Brain = AI->GetBrainComponent())
+			{
+				Brain->RestartLogic();
+			}
+			else if (BehaviorTree)
+			{
+				AI->RunBehaviorTree(BehaviorTree);
+			}
+		}
+	}
+	else
+	{
+		if (bDeactivatedByDayNight)
+		{
+			return; // already deactivated
+		}
+		bDeactivatedByDayNight = true;
+
+		// Despawn-ish: hide, freeze collision/AI. We keep the actor alive so
+		// patrol points & loot configuration stay intact for the next night.
+		SetActorHiddenInGame(true);
+		SetActorEnableCollision(false);
+
+		if (UCharacterMovementComponent* CMC = GetCharacterMovement())
+		{
+			CMC->StopMovementImmediately();
+			CMC->DisableMovement();
+		}
+		if (AAIController* AI = Cast<AAIController>(GetController()))
+		{
+			if (UBrainComponent* Brain = AI->GetBrainComponent())
+			{
+				Brain->StopLogic(TEXT("Daytime despawn"));
+			}
 		}
 	}
 }

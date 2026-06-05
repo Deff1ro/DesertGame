@@ -18,6 +18,7 @@ enum class EDayNightPhase : uint8
 };
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnDayNightPhaseChanged, EDayNightPhase, NewPhase);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnFullDayCompleted, int32, DayNumber);
 
 // Drives the day/night cycle. Rotates an assigned directional light, broadcasts
 // phase transitions, and exposes the gameplay multipliers used by the player's
@@ -93,11 +94,26 @@ public:
 	float MusicFadeSeconds = 1.5f;
 
 	// ============================================================
+	// Auto-save
+	// ============================================================
+
+	// When true, the game is auto-saved every time a full day-night cycle
+	// completes (i.e. the cycle wraps back to StartingPhase after one full
+	// Day + Night). Saves via UDesertGameInstance::SaveGame.
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Cycle|AutoSave")
+	bool bAutoSaveOnFullCycle = true;
+
+	// ============================================================
 	// Events
 	// ============================================================
 
 	UPROPERTY(BlueprintAssignable, Category = "Cycle|Events")
 	FOnDayNightPhaseChanged OnPhaseChanged;
+
+	// Broadcast each time a full Day + Night cycle finishes. DayNumber starts
+	// at 1 for the first completed cycle.
+	UPROPERTY(BlueprintAssignable, Category = "Cycle|Events")
+	FOnFullDayCompleted OnFullDayCompleted;
 
 	// ============================================================
 	// Getters
@@ -111,6 +127,10 @@ public:
 
 	UFUNCTION(BlueprintPure, Category = "Cycle")
 	bool IsNight() const { return CurrentPhase == EDayNightPhase::Night; }
+
+	// Number of full Day+Night cycles completed since the level started.
+	UFUNCTION(BlueprintPure, Category = "Cycle")
+	int32 GetCompletedDayCount() const { return CompletedDayCount; }
 
 	// Normalized [0..1] progress through the current phase.
 	UFUNCTION(BlueprintPure, Category = "Cycle")
@@ -134,8 +154,12 @@ private:
 	UPROPERTY(VisibleInstanceOnly, Category = "Cycle|State")
 	float ElapsedInPhase = 0.f;
 
+	UPROPERTY(VisibleInstanceOnly, Category = "Cycle|State")
+	int32 CompletedDayCount = 0;
+
 	UPROPERTY()
 	TObjectPtr<class UAudioComponent> ActiveMusicComponent;
 
 	void PlayPhaseMusic();
+	void TriggerAutoSave();
 };
